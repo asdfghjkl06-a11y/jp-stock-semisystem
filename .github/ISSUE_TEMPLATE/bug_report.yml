@@ -1,0 +1,30 @@
+name: Bug report
+description: 再現できる不具合を報告する
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 不具合の内容
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      placeholder: APIキーや個人情報は記載しないでください
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 実行環境
+      placeholder: OS、Pythonバージョン、データ取得モード
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: エラー出力
+      render: shell
