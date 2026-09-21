@@ -1,4 +1,5 @@
 from datetime import date
+import math
 
 import pandas as pd
 
@@ -38,7 +39,7 @@ def test_demo_scores_and_filters():
 def test_config_weights_sum_to_one():
     cfg = load_config(__import__("pathlib").Path(__file__).parents[1] / "config.yaml")
     for weights in cfg["weights"].values():
-        assert sum(weights.values()) == 1.0
+        assert math.isclose(sum(weights.values()), 1.0, rel_tol=0, abs_tol=1e-12)
 
 
 def test_manual_mode_empty_api_frames_can_merge():
