@@ -1,0 +1,42 @@
+data:
+  # jquants: APIで株価・財務・週次信用残を取得 / demo: 合成データで動作確認
+  source: jquants
+  lookback_calendar_days: 180
+  request_interval_seconds: 0.15
+  timeout_seconds: 30
+
+filter:
+  strict_supply_data: true
+  max_margin_ratio: 7.0
+  max_lending_ratio: 7.0
+  max_turnover_days: 7.0
+  min_volume: 1000000
+  min_trading_value_yen: 1000000000
+
+chart:
+  chase_deviation_pct: 5.0
+  negative_deviation_pct: 0.0
+
+weights:
+  normal:
+    technical: 0.30
+    supply: 0.25
+    rvol: 0.10
+    financial: 0.20
+    catalyst: 0.15
+  surge:
+    technical: 0.45
+    supply: 0.20
+    rvol: 0.20
+    financial: 0.05
+    catalyst: 0.10
+  early_flow:
+    technical: 0.20
+    supply: 0.35
+    rvol: 0.30
+    financial: 0.05
+    catalyst: 0.10
+
+output:
+  top_n: 10
+
