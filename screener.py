@@ -6,6 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +18,6 @@ from dotenv import load_dotenv
 
 
 ROOT = Path(__file__).resolve().parent
-
-MARGIN_COLUMNS = ["code", "date", "auto_margin_ratio", "auto_long_volume", "auto_short_volume"]
-FINANCIAL_COLUMNS = [
-    "code", "date", "auto_equity_ratio_pct", "auto_dividend_per_share",
-    "auto_sales_growth_pct", "auto_op_growth_pct", "auto_eps_growth_pct",
-]
 
 
 def _num(value: Any) -> float:
@@ -151,7 +146,7 @@ def _normalize_prices(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_margin(raw: pd.DataFrame) -> pd.DataFrame:
-    cols = MARGIN_COLUMNS
+    cols = ["code", "date", "auto_margin_ratio", "auto_long_volume", "auto_short_volume"]
     if raw.empty:
         return pd.DataFrame(columns=cols)
     out = pd.DataFrame({
@@ -165,7 +160,7 @@ def _normalize_margin(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_financials(raw: pd.DataFrame) -> pd.DataFrame:
-    cols = FINANCIAL_COLUMNS
+    cols = ["code", "date", "auto_equity_ratio_pct", "auto_dividend_per_share", "auto_sales_growth_pct", "auto_op_growth_pct", "auto_eps_growth_pct"]
     if raw.empty:
         return pd.DataFrame(columns=cols)
     raw = raw.copy()
@@ -271,19 +266,15 @@ def merge_manual(features: pd.DataFrame) -> pd.DataFrame:
     out = out.merge(fundamentals.drop(columns=["date", "note"], errors="ignore"), on="code", how="left")
     out = out.merge(catalysts.drop(columns=["date"], errors="ignore"), on="code", how="left")
     # 手入力を優先し、なければJ-Quants由来を補完する。
-    def numeric_column(name: str) -> pd.Series:
-        values = out[name] if name in out else pd.Series(np.nan, index=out.index)
-        return pd.to_numeric(values, errors="coerce")
-
-    out["margin_ratio"] = numeric_column("margin_ratio").fillna(numeric_column("auto_margin_ratio"))
-    out["equity_ratio_pct"] = numeric_column("equity_ratio_pct").fillna(numeric_column("auto_equity_ratio_pct"))
+    out["margin_ratio"] = pd.to_numeric(out.get("margin_ratio"), errors="coerce").fillna(out["auto_margin_ratio"])
+    out["equity_ratio_pct"] = pd.to_numeric(out.get("equity_ratio_pct"), errors="coerce").fillna(out["auto_equity_ratio_pct"])
     for manual, auto in [("sales_growth_pct", "auto_sales_growth_pct"), ("operating_profit_growth_pct", "auto_op_growth_pct"), ("eps_growth_pct", "auto_eps_growth_pct")]:
-        out[manual] = numeric_column(manual).fillna(numeric_column(auto))
-    dividend = numeric_column("dividend_yield_pct")
-    derived_yield = numeric_column("auto_dividend_per_share") / numeric_column("close") * 100
+        out[manual] = pd.to_numeric(out.get(manual), errors="coerce").fillna(out[auto])
+    dividend = pd.to_numeric(out.get("dividend_yield_pct"), errors="coerce")
+    derived_yield = out["auto_dividend_per_share"] / out["close"] * 100
     out["dividend_yield_pct"] = dividend.fillna(derived_yield)
     for col in ["lending_ratio", "turnover_days", "material_score"]:
-        out[col] = numeric_column(col)
+        out[col] = pd.to_numeric(out.get(col), errors="coerce")
     return out
 
 
@@ -322,7 +313,7 @@ def score(features: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
     supply_ok = (df.margin_ratio <= f["max_margin_ratio"]) & (df.lending_ratio <= f["max_lending_ratio"]) & (df.turnover_days <= f["max_turnover_days"])
     if not f["strict_supply_data"]:
         supply_ok = supply_ok | df[["margin_ratio", "lending_ratio", "turnover_days"]].isna().any(axis=1)
-    df["filter_pass"] = liquidity & supply_ok
+    df["filter_pass"] = liquidity & supply_ok & (df.close > df.ma5) & (df.ma5_slope_pct > 0)
     c = cfg["chart"]
     df["chart_judgement"] = np.select(
         [df.deviation_5ma_pct >= c["chase_deviation_pct"], (df.close > df.ma5) & (df.ma5_slope_pct > 0), df.deviation_5ma_pct < c["negative_deviation_pct"]],
@@ -383,17 +374,16 @@ def export_results(df: pd.DataFrame, cfg: dict[str, Any], as_of: date) -> Path:
 
 def run(as_of_text: str | None = None, demo: bool = False) -> Path:
     cfg = load_config(ROOT / "config.yaml")
-    as_of = datetime.strptime(as_of_text, "%Y-%m-%d").date() if as_of_text else date.today()
+    as_of = datetime.strptime(as_of_text, "%Y-%m-%d").date() if as_of_text else datetime.now(ZoneInfo("Asia/Tokyo")).date()
     universe = pd.read_csv(ROOT / "input" / "universe.csv", dtype={"code": str})
     universe["code"] = universe["code"].map(_code)
+    if demo:
+        synthetic = pd.DataFrame({"code": [str(9000 + i) for i in range(40)], "name": [f"架空テスト銘柄{i+1}" for i in range(40)]})
+        universe = pd.concat([universe, synthetic], ignore_index=True)
     if demo or cfg["data"]["source"] == "demo":
         bundle = make_demo(universe, as_of)
     elif cfg["data"]["source"] == "manual_csv":
-        bundle = DataBundle(
-            load_manual_prices(),
-            pd.DataFrame(columns=MARGIN_COLUMNS),
-            pd.DataFrame(columns=FINANCIAL_COLUMNS),
-        )
+        bundle = DataBundle(load_manual_prices(), pd.DataFrame(), pd.DataFrame())
     else:
         bundle = fetch_jquants(universe, as_of, cfg)
     features = build_features(universe, bundle)
@@ -406,4 +396,9 @@ def run(as_of_text: str | None = None, demo: bool = False) -> Path:
         merged["turnover_days"] = merged["turnover_days"].fillna(1.2 + idx % 7)
         merged["material_score"] = merged["material_score"].fillna(40 + idx % 7 * 8)
     scored = score(merged, cfg)
-    return export_results(scored, cfg, as_of)
+    result = export_results(scored, cfg, as_of)
+    if demo:
+        (ROOT / "output" / "DATA_SOURCE.txt").write_text("DEMO: 合成データです。実在株価ではありません。\n", encoding="utf-8")
+    else:
+        (ROOT / "output" / "DATA_SOURCE.txt").write_text("LIVE: J-Quants取得。需給・材料CSVの鮮度は別途確認してください。\n", encoding="utf-8")
+    return result

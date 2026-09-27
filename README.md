@@ -1,7 +1,5 @@
 # 日本株4要素スクリーナー（半自動運用版）
 
-日本株を「需給・テクニカル・材料・財務」の説明可能な固定ルールで比較する、オープンソースのPythonツールです。ブラックボックスな売買シグナルではなく、入力値・配点・除外理由をExcelとCSVに残すことを重視しています。
-
 需給・テクニカル・材料・財務を固定ルールで採点し、次の3ランキングを同時に作ります。
 
 - 通常型：4要素のバランス重視
@@ -9,14 +7,6 @@
 - 初動需給型：RVOLと需給の軽さ重視
 
 出力は `output/screening_YYYY-MM-DD.xlsx`、監査用CSV、ChatGPTに渡せるMarkdownレポートです。これは投資判断を補助するスクリーニングであり、売買推奨や利益保証ではありません。
-
-## 特徴
-
-- APIなしのデモモードで、インストール直後に動作確認
-- J-Quants API V2または手動OHLCV CSVに対応
-- 閾値・重みを `config.yaml` で管理
-- 入力データの充足率、一次フィルターの除外銘柄、全スコアを保存
-- 注文発注機能なし。分析と実取引を明確に分離
 
 ## 初回セットアップ
 
@@ -47,8 +37,6 @@ J-Quants V2を使う場合は `.env` の `JQUANTS_API_KEY` を自分のキーに
 ```bash
 python run_screen.py --demo --as-of 2026-09-11
 ```
-
-成功すると `output/screening_2026-09-11.xlsx` が作成されます。開発に参加する場合は `pip install -r requirements-dev.txt` のあと `pytest` を実行してください。
 
 ## 毎日の運用（約3分＋API取得時間）
 
@@ -130,8 +118,100 @@ Excelを添付し、次だけ送れば運用できます。
 
 ## データ上の注意
 
-J-Quants V2は `x-api-key` 方式です。株価は調整後OHLCVを優先して使います。信用残の定義や提供頻度、契約プランごとの取得可能期間は変更される場合があるため、エラー時はJ-Quants公式リファレンスを確認してください。本実装はJSONの列順ではなく項目名で読みますが、APIの項目名変更には追随が必要です。
+J-Quants V2は `x-api-key` 方式です。株価は調整後OHLCVを優先して使います。週次信用残はAPIから取得しますが、2026年9月28日に日次化・項目追加が予定されています。本実装はJSONの列順ではなく項目名で読むため、その変更に備えています。取得元の定義変更があった場合は、READMEだけでなく実データの列名も点検してください。
 
-## プロジェクトへの参加
 
-IssueやPull Requestを歓迎します。詳細は `CONTRIBUTING.md`、脆弱性の連絡方法は `SECURITY.md` を参照してください。本プロジェクトはMIT Licenseで公開できます。
+## X半自動運用（追加機能）
+
+スクリーニング結果からX投稿候補を最大8本作り、**人間が承認したものだけ**投稿します。初期状態は必ずDRY RUNです。完全自動の大量投稿・大量返信ではなく、事実確認と承認を残す設計です。
+
+### 1. 投稿候補を作る
+
+先に通常のスクリーニングを実行し、その日の `candidates_YYYY-MM-DD.csv` を作ります。
+
+```bash
+python run_screen.py --demo --as-of 2026-09-11
+python run_x_engine.py build --as-of 2026-09-11 --count 8
+```
+
+候補は `output/x_post_queue.csv` と `output/x_growth.db` に保存されます。各投稿は FACT / 見方 / 次に確認する仮説を分離しています。
+
+### 2. 内容を確認して承認する
+
+```bash
+python run_x_engine.py approve 1,2,3
+python run_x_engine.py reject 4
+```
+
+### 3. DRY RUNで確認する
+
+```bash
+python run_x_engine.py publish
+```
+
+このコマンドはXへ投稿しません。承認済み本文を表示するだけです。
+
+### 4. X APIを設定して実投稿する
+
+`.env` にX Developer Portalで取得した認証情報を設定します。秘密情報はチャットに貼らないでください。X側で投稿権限が付与されたUser Contextのトークンが必要です。
+
+```bash
+python run_x_engine.py publish --live --limit 1
+```
+
+最初は必ず `--limit 1` で1投稿だけ確認してください。正常動作を確認してから増やします。
+
+### 5. 投稿成績を保存する
+
+APIプラン・認証権限で利用可能な指標は異なります。
+
+```bash
+python run_x_engine.py metrics
+python run_x_engine.py report
+```
+
+`output/x_performance.csv` に時系列で保存されます。これを翌日の投稿改善に使えます。
+
+### 安全設計
+
+- デフォルトはDRY RUN。`--live` を明示しない限り投稿しない。
+- AI生成後に人間承認を必須にする。
+- 同一本文はSHA-256で重複登録を防止する。
+- 投資投稿は売買推奨ではなく監視メモとして生成する。
+- 自動リプ機能は初版では意図的に実装していない。大量自動返信によるスパム判定を避けるため、まず投稿運用と計測を安定させる。
+
+## 📱 iPhoneだけで運用する（GitHub Actions版）
+
+Macを常時起動する必要はありません。GitHub Actionsを実行環境にし、iPhoneは候補確認と承認に使います。
+
+### 最初の1回だけ
+
+1. このフォルダを自分の**非公開GitHubリポジトリ**へアップロードします。
+2. GitHub → Settings → Secrets and variables → Actions に次を登録します。
+   - `JQUANTS_API_KEY`
+   - `X_BEARER_TOKEN`
+   - `X_USER_ACCESS_TOKEN`
+3. Actionsを有効にします。秘密情報はファイルやチャットに貼らないでください。
+
+### 毎日の使い方（iPhone）
+
+1. 平日07:30 JSTに `1 - 毎朝 X投稿候補を作る` が自動実行されます。
+2. リポジトリの `output/mobile_preview.md` を開くと、投稿候補とIDをスマホ向け表示で確認できます。
+3. GitHub → Actions → `2 - iPhoneで承認して投稿` → Run workflow。
+4. `ids` に投稿したいID（例 `12` または `12,14`）を入力します。
+5. 最初は `live` をOFFにしてDRY RUN。内容確認後のみONにします。
+6. 22:00 JSTに `3 - X投稿成績を回収` が自動実行されます。
+
+### 重要
+
+- GitHubリポジトリは非公開を推奨します。
+- X API/J-Quantsのキーは必ずGitHub Secretsに保存します。
+- 投稿候補は人間が確認・承認する設計です。
+- 初回の実投稿は1件だけで確認してください。
+- GitHub Actionsの無料枠・X API・J-Quantsの料金/制限は各サービスの現行プランに依存します。
+
+## GitHub Actions / iPhone DRY RUN
+
+Actions → Stock candidates DRY RUN → Run workflow (`demo=true`). Download the run's artifact and inspect `mobile_preview.md` and `x_post_queue.csv`. No X posting occurs. `DATA_SOURCE.txt` labels synthetic demo data.
+
+For live data, set the GitHub repository secret `JQUANTS_API_KEY`. Missing keys cause a clear failure. The scheduled 07:30 JST run uses previous trading data. Only 20 watchlist securities are covered, not the full TSE. Lending ratio, turnover days, and catalysts require fresh manual CSV entries; missing supply data may result in fewer than eight drafts and the verification fails. Check dates, sources and figures before any public post.
