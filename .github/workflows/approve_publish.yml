@@ -1,0 +1,10 @@
+name: Publishing disabled
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  info:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'No automatic X publishing. Review drafts and post manually.'

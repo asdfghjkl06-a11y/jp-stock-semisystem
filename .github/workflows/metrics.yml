@@ -1,0 +1,10 @@
+name: Metrics disabled
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  info:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Metrics collection disabled.'

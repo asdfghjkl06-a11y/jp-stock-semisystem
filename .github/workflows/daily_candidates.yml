@@ -1,0 +1,61 @@
+name: Stock candidates DRY RUN
+on:
+  schedule:
+    - cron: '30 22 * * 0-4' # 07:30 JST
+  workflow_dispatch:
+    inputs:
+      demo:
+        description: Synthetic demo data
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TZ: Asia/Tokyo
+      JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Fetch prices and screen
+        shell: bash
+        run: |
+          if [[ "${{ inputs.demo }}" == "true" ]]; then
+            python run_screen.py --demo
+          else
+            test -n "$JQUANTS_API_KEY" || { echo 'JQUANTS_API_KEY secret required'; exit 1; }
+            python run_screen.py
+          fi
+      - name: Generate eight drafts
+        run: python run_x_engine.py build --count 8
+      - name: Build iPhone preview
+        run: python scripts/mobile_preview.py
+      - name: Verify DRY RUN
+        run: |
+          python - <<'PYVERIFY'
+          import pandas as pd
+          q = pd.read_csv('output/x_post_queue.csv')
+          assert len(q) == 8, f'Expected 8 drafts, got {len(q)}'
+          assert q.status.eq('draft').all()
+          print('DRY RUN: eight drafts, zero X posts')
+          PYVERIFY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stock-candidates-${{ github.run_number }}
+          path: |
+            output/DATA_SOURCE.txt
+            output/screening_*.xlsx
+            output/candidates_*.csv
+            output/report_*.md
+            output/x_post_queue.csv
+            output/mobile_preview.md
+          retention-days: 14
+          if-no-files-found: warn
