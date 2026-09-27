@@ -117,6 +117,44 @@ def fetch_jquants(universe: pd.DataFrame, as_of: date, cfg: dict[str, Any]) -> D
     )
 
 
+def fetch_free_prices(universe: pd.DataFrame, as_of: date, cfg: dict[str, Any]) -> DataBundle:
+    """Unofficial personal-use price feed; no supply/fundamental data is inferred."""
+    import yfinance as yf
+
+    start = as_of - timedelta(days=int(cfg["data"]["lookback_calendar_days"]))
+    rows: list[dict[str, Any]] = []
+    for code in universe["code"]:
+        symbol = f"{code}.T"
+        try:
+            bars = yf.Ticker(symbol).history(
+                start=start.isoformat(), end=(as_of + timedelta(days=1)).isoformat(),
+                interval="1d", auto_adjust=False, actions=False,
+            )
+        except Exception as exc:
+            print(f"{symbol}: 取得失敗: {exc}")
+            continue
+        if bars.empty:
+            print(f"{symbol}: 株価なし")
+            continue
+        for stamp, bar in bars.iterrows():
+            close, volume = _num(bar.get("Close")), _num(bar.get("Volume"))
+            if pd.isna(close) or pd.isna(volume):
+                continue
+            rows.append({
+                "code": code, "date": pd.Timestamp(stamp).date(),
+                "open": _num(bar.get("Open")), "high": _num(bar.get("High")),
+                "low": _num(bar.get("Low")), "close": close, "volume": volume,
+                "trading_value": close * volume,  # 推計値。正式な売買代金ではない。
+            })
+    if not rows:
+        raise RuntimeError("無料株価ソースから価格を取得できませんでした。候補は作成しません。")
+    prices = pd.DataFrame(rows)
+    latest = prices["date"].max()
+    if (as_of - latest).days > 7:
+        raise RuntimeError(f"株価が古すぎます（最終 {latest}）。候補は作成しません。")
+    return DataBundle(prices, _normalize_margin(pd.DataFrame()), _normalize_financials(pd.DataFrame()))
+
+
 def load_manual_prices() -> pd.DataFrame:
     path = ROOT / "input" / "prices_manual.csv"
     df = pd.read_csv(path, dtype={"code": str})
@@ -313,7 +351,8 @@ def score(features: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
     supply_ok = (df.margin_ratio <= f["max_margin_ratio"]) & (df.lending_ratio <= f["max_lending_ratio"]) & (df.turnover_days <= f["max_turnover_days"])
     if not f["strict_supply_data"]:
         supply_ok = supply_ok | df[["margin_ratio", "lending_ratio", "turnover_days"]].isna().any(axis=1)
-    df["filter_pass"] = liquidity & supply_ok & (df.close > df.ma5) & (df.ma5_slope_pct > 0)
+    df["primary_pass"] = liquidity & (df.close > df.ma5) & (df.ma5_slope_pct > 0)
+    df["filter_pass"] = df["primary_pass"] & supply_ok
     c = cfg["chart"]
     df["chart_judgement"] = np.select(
         [df.deviation_5ma_pct >= c["chase_deviation_pct"], (df.close > df.ma5) & (df.ma5_slope_pct > 0), df.deviation_5ma_pct < c["negative_deviation_pct"]],
@@ -334,10 +373,10 @@ def _evaluation(row: pd.Series) -> str:
     return "、".join(strengths[:3]) or "総合バランス型"
 
 
-def export_results(df: pd.DataFrame, cfg: dict[str, Any], as_of: date) -> Path:
+def export_results(df: pd.DataFrame, cfg: dict[str, Any], as_of: date, provisional: bool = False) -> Path:
     out_dir = ROOT / "output"
     out_dir.mkdir(exist_ok=True)
-    eligible = df[df.filter_pass].copy()
+    eligible = df[df.primary_pass if provisional else df.filter_pass].copy()
     eligible["評価"] = eligible.apply(_evaluation, axis=1)
     mode_names = {"normal": "通常型", "surge": "噴き上げ型", "early_flow": "初動需給型"}
     rankings: dict[str, pd.DataFrame] = {}
@@ -360,7 +399,7 @@ def export_results(df: pd.DataFrame, cfg: dict[str, Any], as_of: date) -> Path:
                 width = min(max(len(str(cell.value or "")) for cell in col) + 2, 36)
                 ws.column_dimensions[col[0].column_letter].width = width
     report = out_dir / f"report_{as_of.isoformat()}.md"
-    lines = [f"# 日本株スクリーニング結果（{as_of.isoformat()}）", "", f"一次フィルター通過: {len(eligible)} / {len(df)}銘柄", ""]
+    lines = [f"# 日本株スクリーニング結果（{as_of.isoformat()}）", "", f"{'価格・出来高のみの暫定一次抽出（需給未確認）' if provisional else '全条件通過'}: {len(eligible)} / {len(df)}銘柄", ""]
     for name, table in rankings.items():
         lines += [f"## {name} TOP{len(table)}", "", table.to_markdown(index=False), ""]
     if rankings["通常型"].empty:
@@ -372,7 +411,7 @@ def export_results(df: pd.DataFrame, cfg: dict[str, Any], as_of: date) -> Path:
     return xlsx
 
 
-def run(as_of_text: str | None = None, demo: bool = False) -> Path:
+def run(as_of_text: str | None = None, demo: bool = False, free: bool = False) -> Path:
     cfg = load_config(ROOT / "config.yaml")
     as_of = datetime.strptime(as_of_text, "%Y-%m-%d").date() if as_of_text else datetime.now(ZoneInfo("Asia/Tokyo")).date()
     universe = pd.read_csv(ROOT / "input" / "universe.csv", dtype={"code": str})
@@ -380,8 +419,12 @@ def run(as_of_text: str | None = None, demo: bool = False) -> Path:
     if demo:
         synthetic = pd.DataFrame({"code": [str(9000 + i) for i in range(40)], "name": [f"架空テスト銘柄{i+1}" for i in range(40)]})
         universe = pd.concat([universe, synthetic], ignore_index=True)
+    if demo and free:
+        raise ValueError("--demo と --free は同時に指定できません")
     if demo or cfg["data"]["source"] == "demo":
         bundle = make_demo(universe, as_of)
+    elif free:
+        bundle = fetch_free_prices(universe, as_of, cfg)
     elif cfg["data"]["source"] == "manual_csv":
         bundle = DataBundle(load_manual_prices(), pd.DataFrame(), pd.DataFrame())
     else:
@@ -396,9 +439,16 @@ def run(as_of_text: str | None = None, demo: bool = False) -> Path:
         merged["turnover_days"] = merged["turnover_days"].fillna(1.2 + idx % 7)
         merged["material_score"] = merged["material_score"].fillna(40 + idx % 7 * 8)
     scored = score(merged, cfg)
-    result = export_results(scored, cfg, as_of)
+    result = export_results(scored, cfg, as_of, provisional=free)
     if demo:
         (ROOT / "output" / "DATA_SOURCE.txt").write_text("DEMO: 合成データです。実在株価ではありません。\n", encoding="utf-8")
+    elif free:
+        (ROOT / "output" / "DATA_SOURCE.txt").write_text(
+            "PROVISIONAL: Yahoo Finance via yfinance（非公式）。対象は登録済み20銘柄のみ。"
+            "終値・出来高で一次抽出。売買代金は終値×出来高の推計。"
+            "信用倍率・貸借倍率・回転日数は未確認。投稿前に出典と最新値を確認してください。\n",
+            encoding="utf-8",
+        )
     else:
         (ROOT / "output" / "DATA_SOURCE.txt").write_text("LIVE: J-Quants取得。需給・材料CSVの鮮度は別途確認してください。\n", encoding="utf-8")
     return result

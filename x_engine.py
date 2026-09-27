@@ -62,24 +62,28 @@ def _clean(v: Any) -> str:
     return str(v).strip()
 
 
-def _post_text(row: pd.Series, rank: int, mode: str) -> tuple[str, str, str]:
+def _post_text(row: pd.Series, rank: int, mode: str, source: str = '') -> tuple[str, str, str, str]:
     name, code = _clean(row.get('name')), _clean(row.get('code'))
     close = row.get('close')
     rvol = row.get('rvol')
     dev = row.get('deviation_5ma_pct')
-    fact = f'{name}（{code}）を{mode}で監視。終値{close:.1f}円、RVOL {rvol:.2f}倍、5MA乖離{dev:+.2f}% 。'
+    price_date = str(row.get('price_date', ''))[:10]
+    fact = f'{name}（{code}）を{mode}で監視。{price_date}終値{close:.1f}円、RVOL {rvol:.2f}倍、5MA乖離{dev:+.2f}% 。'
     strengths = []
     if row.get('technical_score', 0) >= 70: strengths.append('テクニカルが相対的に強い')
-    if row.get('supply_score', 0) >= 70: strengths.append('需給スコアが高い')
+    if source != 'PROVISIONAL' and row.get('supply_score', 0) >= 70: strengths.append('需給スコアが高い')
     if rvol >= 1.5: strengths.append('出来高が20日平均を上回る')
     interpretation = ' / '.join(strengths) or '複数指標を継続確認したい局面'
     hypothesis = '次の取引日も出来高を伴って5MA上を維持できるかを確認。崩れれば仮説を撤回。'
+    heading = '【暫定・需給未確認】' if source == 'PROVISIONAL' else ('【架空データ・投稿不可】' if source == 'DEMO' else '【監視メモ】')
+    disclaimer = ('※価格・出来高の一次抽出のみ。信用・貸借・回転日数は未確認。投稿前に数値と利用条件を確認。'
+                  if source == 'PROVISIONAL' else '※売買推奨ではなく、確認用の監視メモです。')
     text = (
-        f'【今日の監視 #{rank}】{name}（{code}）\n'
-        f'FACT：終値 {close:.1f}円 / RVOL {rvol:.2f}倍 / 5MA乖離 {dev:+.2f}%\n'
+        f'{heading} #{rank} {name}（{code}）\n'
+        f'FACT：{price_date}終値 {close:.1f}円 / RVOL {rvol:.2f}倍 / 5MA乖離 {dev:+.2f}%\n'
         f'見方：{interpretation}\n'
         f'次に見る点：出来高を伴って5MA上を維持できるか。\n'
-        '※売買推奨ではなく、公開データを使った監視メモです。'
+        f'{disclaimer}'
     )
     return fact, interpretation, hypothesis, text
 
@@ -90,8 +94,12 @@ def build_queue(as_of: str | None = None, count: int = 8) -> int:
     if not csv_path.exists():
         raise FileNotFoundError(f'{csv_path.name} がありません。先に run_screen.py を実行してください。')
     df = pd.read_csv(csv_path, dtype={'code': str})
-    eligible = df[df['filter_pass'].astype(str).str.lower().isin(['true', '1'])].copy()
+    marker = (ROOT / 'output' / 'DATA_SOURCE.txt').read_text(encoding='utf-8')
+    source = marker.split(':', 1)[0]
+    pass_col = 'primary_pass' if source == 'PROVISIONAL' else 'filter_pass'
+    eligible = df[df[pass_col].astype(str).str.lower().isin(['true', '1'])].copy()
     if eligible.empty:
+        export_queue()
         return 0
     modes = [('score_normal', '通常型'), ('score_surge', '噴き上げ型'), ('score_early_flow', '初動需給型')]
     picks = []
@@ -106,7 +114,7 @@ def build_queue(as_of: str | None = None, count: int = 8) -> int:
         if len(picks) >= count: break
     con = connect(); added = 0
     for rank, (row, mode) in enumerate(picks, 1):
-        fact, interpretation, hypothesis, text = _post_text(row, rank, mode)
+        fact, interpretation, hypothesis, text = _post_text(row, rank, mode, source)
         digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
         try:
             con.execute('''INSERT INTO post_queue(created_at,category,fact,interpretation,hypothesis,post_text,content_hash,status)
