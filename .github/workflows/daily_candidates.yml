@@ -36,7 +36,17 @@ jobs:
       - name: Generate eight drafts
         run: python run_x_engine.py build --count 8
       - name: Build iPhone preview
-        run: python scripts/mobile_preview.py
+        run: |
+          python - <<'PYPREVIEW'
+          import pandas as pd
+          from pathlib import Path
+          q = pd.read_csv('output/x_post_queue.csv')
+          marker = Path('output/DATA_SOURCE.txt').read_text().strip()
+          lines = ['# X投稿候補（確認用）', '', marker, '']
+          for _, row in q.iterrows():
+              lines.extend([f"## #{row['id']} — {row['status']}", '', row['post_text'], ''])
+          Path('output/mobile_preview.md').write_text('\n'.join(lines), encoding='utf-8')
+          PYPREVIEW
       - name: Verify DRY RUN
         run: |
           python - <<'PYVERIFY'
