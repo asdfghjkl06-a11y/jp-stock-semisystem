@@ -180,38 +180,14 @@ python run_x_engine.py report
 - 投資投稿は売買推奨ではなく監視メモとして生成する。
 - 自動リプ機能は初版では意図的に実装していない。大量自動返信によるスパム判定を避けるため、まず投稿運用と計測を安定させる。
 
-## 📱 iPhoneだけで運用する（GitHub Actions版）
+## 📱 iPhoneで見る GitHub Actions の暫定DRY RUN
 
-Macを常時起動する必要はありません。GitHub Actionsを実行環境にし、iPhoneは候補確認と承認に使います。
+Macを起動し続ける必要はありません。`Stock candidates DRY RUN` は平日07:30 JSTにGitHub上で実行されます。現在の定期実行はYahoo Financeの非公式データを `yfinance` で取得し、`input/universe.csv` の20銘柄だけを価格・出来高・5MAで一次抽出します。J-QuantsやXのAPIキーは不要です。データ取得元の制限や変更で失敗する可能性があります。
 
-### 最初の1回だけ
+1. GitHubの **Actions → Stock candidates DRY RUN** を開きます。
+2. 実データを今すぐ試す場合は **Run workflow** で `demo` をOFFにします。`demo` ONは架空データの動作確認です。
+3. 完了した実行の **Artifacts → stock-candidates-番号** をダウンロードして、`mobile_preview.md` を開きます。`output` フォルダ内のファイルがリポジトリに自動コミットされるわけではありません。
 
-1. このフォルダを自分の**非公開GitHubリポジトリ**へアップロードします。
-2. GitHub → Settings → Secrets and variables → Actions に次を登録します。
-   - `JQUANTS_API_KEY`
-   - `X_BEARER_TOKEN`
-   - `X_USER_ACCESS_TOKEN`
-3. Actionsを有効にします。秘密情報はファイルやチャットに貼らないでください。
+投稿候補は最大8本です。条件を満たす銘柄が少なければ本数も減ります。暫定候補には「需給未確認」と表示します。信用倍率・貸借倍率・回転日数と材料・財務の裏付けは自動取得していません。各候補の取引日、価格、出来高、開示を確認してからご自身で判断してください。Xへの自動投稿はしません。`--live` を指定する別の手動コマンドをこのワークフローは呼びません。
 
-### 毎日の使い方（iPhone）
-
-1. 平日07:30 JSTに `1 - 毎朝 X投稿候補を作る` が自動実行されます。
-2. リポジトリの `output/mobile_preview.md` を開くと、投稿候補とIDをスマホ向け表示で確認できます。
-3. GitHub → Actions → `2 - iPhoneで承認して投稿` → Run workflow。
-4. `ids` に投稿したいID（例 `12` または `12,14`）を入力します。
-5. 最初は `live` をOFFにしてDRY RUN。内容確認後のみONにします。
-6. 22:00 JSTに `3 - X投稿成績を回収` が自動実行されます。
-
-### 重要
-
-- GitHubリポジトリは非公開を推奨します。
-- X API/J-Quantsのキーは必ずGitHub Secretsに保存します。
-- 投稿候補は人間が確認・承認する設計です。
-- 初回の実投稿は1件だけで確認してください。
-- GitHub Actionsの無料枠・X API・J-Quantsの料金/制限は各サービスの現行プランに依存します。
-
-## GitHub Actions / iPhone DRY RUN
-
-Actions → Stock candidates DRY RUN → Run workflow (`demo=true`). Download the run's artifact and inspect `mobile_preview.md` and `x_post_queue.csv`. No X posting occurs. `DATA_SOURCE.txt` labels synthetic demo data.
-
-For live data, set the GitHub repository secret `JQUANTS_API_KEY`. Missing keys cause a clear failure. The scheduled 07:30 JST run uses previous trading data. Only 20 watchlist securities are covered, not the full TSE. Lending ratio, turnover days, and catalysts require fresh manual CSV entries; missing supply data may result in fewer than eight drafts and the verification fails. Check dates, sources and figures before any public post.
+データ提供元の利用条件を確認してください。`yfinance` はYahooの非公式APIを使い、個人的な研究用途を想定しています。公開投稿への転載許諾があるという意味ではありません。リポジトリは非公開を推奨します。既存のJ-Quants方式で需給を含める場合は、利用プランと入力CSVを別途整えてください。
